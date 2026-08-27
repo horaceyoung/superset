@@ -369,6 +369,8 @@ def test_explore_command_uses_chart_access_when_slice_exists(app_context):
 
     mock_slc = MagicMock()
     mock_slc.data = {"slice_id": 1}
+    mock_slc.datasource_id = 1
+    mock_slc.datasource_type = "table"
     mock_slc.created_on_humanized = "1 day ago"
     mock_slc.changed_on_humanized = "1 day ago"
     mock_slc.dashboards = []
@@ -401,3 +403,57 @@ def test_explore_command_uses_chart_access_when_slice_exists(app_context):
     ):
         cmd.run()
         mock_sm.raise_for_access.assert_called_once_with(chart=mock_slc)
+
+
+def test_explore_command_checks_datasource_when_form_data_overrides_chart_datasource(
+    app_context,
+):
+    """GetExploreCommand checks datasource access when form data overrides a chart."""
+    from superset.commands.explore.get import GetExploreCommand
+    from superset.commands.explore.parameters import CommandParameters
+
+    params = CommandParameters(
+        permalink_key=None,
+        form_data_key=None,
+        datasource_id=1,
+        datasource_type="table",
+        slice_id=1,
+    )
+    cmd = GetExploreCommand(params)
+
+    mock_slc = MagicMock()
+    mock_slc.data = {"slice_id": 1}
+    mock_slc.datasource_id = 2
+    mock_slc.datasource_type = "table"
+    mock_slc.created_on_humanized = "1 day ago"
+    mock_slc.changed_on_humanized = "1 day ago"
+    mock_slc.dashboards = []
+    mock_slc.created_by = None
+    mock_slc.changed_by = None
+
+    mock_datasource = MagicMock()
+    mock_datasource.name = "test"
+    mock_datasource.default_endpoint = None
+
+    mock_request = MagicMock()
+    mock_request.args = {}
+
+    with (
+        patch(
+            "superset.commands.explore.get.get_form_data",
+            return_value=({"datasource": "1__table", "viz_type": "table"}, mock_slc),
+        ),
+        patch(
+            "superset.commands.explore.get.get_datasource_info",
+            return_value=(1, "table"),
+        ),
+        patch(
+            "superset.commands.explore.get.DatasourceDAO.get_datasource",
+            return_value=mock_datasource,
+        ),
+        patch("superset.commands.explore.get.security_manager") as mock_sm,
+        patch("superset.commands.explore.get.sanitize_datasource_data"),
+        patch("superset.commands.explore.get.request", mock_request),
+    ):
+        cmd.run()
+        mock_sm.raise_for_access.assert_called_once_with(datasource=mock_datasource)

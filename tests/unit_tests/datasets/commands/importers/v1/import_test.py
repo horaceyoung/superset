@@ -1530,6 +1530,129 @@ def test_import_dataset_access_check(
         import_dataset(config)
 
 
+def test_import_dataset_virtual_sql_access_check(
+    mocker: MockerFixture,
+    session: Session,
+) -> None:
+    """
+    A virtual dataset's SQL must be authorized against the database, not only
+    against the dataset's declared schema.
+    """
+    from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
+    from superset.exceptions import SupersetSecurityException
+
+    mocker.patch.object(security_manager, "can_access", return_value=True)
+
+    def raise_for_access(**kwargs: Any) -> None:
+        if kwargs.get("sql"):
+            raise SupersetSecurityException(
+                SupersetError(
+                    error_type=SupersetErrorType.TABLE_SECURITY_ACCESS_ERROR,
+                    message="User does not have access to the tables in the SQL",
+                    level=ErrorLevel.ERROR,
+                )
+            )
+
+    mock_raise_for_access = mocker.patch.object(
+        security_manager,
+        "raise_for_access",
+        side_effect=raise_for_access,
+    )
+
+    engine = db.session.get_bind()
+    SqlaTable.metadata.create_all(engine)  # pylint: disable=no-member
+
+    database = Database(database_name="my_database", sqlalchemy_uri="sqlite://")
+    db.session.add(database)
+    db.session.flush()
+
+    config = copy.deepcopy(dataset_fixture)
+    config["database_id"] = database.id
+    config["schema"] = "public"
+    config["sql"] = "SELECT * FROM finance.salaries"
+
+    with pytest.raises(DatasetAccessDeniedError):
+        import_dataset(config)
+
+    mock_raise_for_access.assert_called_with(
+        database=database,
+        sql="SELECT * FROM finance.salaries",
+        catalog="default",
+        schema="public",
+    )
+
+
+def test_import_dataset_virtual_sql_unparsable(
+    mocker: MockerFixture,
+    session: Session,
+) -> None:
+    """
+    SQL that cannot be parsed cannot be authorized, so the import is refused.
+    """
+    from superset.exceptions import SupersetParseError
+
+    mocker.patch.object(security_manager, "can_access", return_value=True)
+
+    def raise_for_access(**kwargs: Any) -> None:
+        if kwargs.get("sql"):
+            raise SupersetParseError(
+                sql=kwargs["sql"],
+                engine="sqlite",
+                message="Invalid SQL",
+            )
+
+    mocker.patch.object(
+        security_manager,
+        "raise_for_access",
+        side_effect=raise_for_access,
+    )
+
+    engine = db.session.get_bind()
+    SqlaTable.metadata.create_all(engine)  # pylint: disable=no-member
+
+    database = Database(database_name="my_database", sqlalchemy_uri="sqlite://")
+    db.session.add(database)
+    db.session.flush()
+
+    config = copy.deepcopy(dataset_fixture)
+    config["database_id"] = database.id
+    config["sql"] = "SELECT ("
+
+    with pytest.raises(ImportFailedError) as excinfo:
+        import_dataset(config)
+
+    assert "its SQL is invalid" in str(excinfo.value)
+
+
+def test_import_dataset_virtual_sql_access_granted(
+    mocker: MockerFixture,
+    session: Session,
+) -> None:
+    """
+    A virtual dataset whose SQL the user is authorized for imports normally.
+    """
+    mocker.patch.object(security_manager, "can_access", return_value=True)
+    mock_raise_for_access = mocker.patch.object(
+        security_manager, "raise_for_access", return_value=None
+    )
+
+    engine = db.session.get_bind()
+    SqlaTable.metadata.create_all(engine)  # pylint: disable=no-member
+
+    database = Database(database_name="my_database", sqlalchemy_uri="sqlite://")
+    db.session.add(database)
+    db.session.flush()
+
+    config = copy.deepcopy(dataset_fixture)
+    config["database_id"] = database.id
+    config["sql"] = "SELECT 1 AS one"
+
+    sqla_table = import_dataset(config)
+
+    assert sqla_table.sql == "SELECT 1 AS one"
+    assert mock_raise_for_access.call_count == 2
+
+
 def test_import_soft_deleted_dataset_overwrite_restores_in_place(
     mocker: MockerFixture,
     session: Session,

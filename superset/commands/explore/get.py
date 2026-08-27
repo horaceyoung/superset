@@ -124,7 +124,13 @@ class GetExploreCommand(BaseCommand, ABC):
 
         if datasource:
             datasource_name = datasource.name
-            if slc:
+            # The chart check only covers the chart's own datasource, so it can
+            # only be relied on when the resolved datasource (which may come from
+            # request supplied form data) is the chart's datasource.
+            if slc and (self._datasource_id, self._datasource_type) == (
+                slc.datasource_id,
+                slc.datasource_type,
+            ):
                 security_manager.raise_for_access(chart=slc)
             else:
                 security_manager.raise_for_access(datasource=datasource)

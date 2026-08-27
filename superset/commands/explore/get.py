@@ -38,6 +38,7 @@ from superset.exceptions import SupersetException
 from superset.explore.exceptions import WrongEndpointError
 from superset.explore.permalink.exceptions import ExplorePermalinkGetFailedError
 from superset.extensions import security_manager
+from superset.models.slice import Slice
 from superset.superset_typing import ExplorableData
 from superset.utils import core as utils, json
 from superset.views.utils import (
@@ -59,6 +60,14 @@ class GetExploreCommand(BaseCommand, ABC):
         self._datasource_id = params.datasource_id
         self._datasource_type = params.datasource_type
         self._slice_id = params.slice_id
+
+    def _is_chart_datasource(self, slc: Slice) -> bool:
+        """Whether the resolved datasource is the chart's own datasource"""
+        return (
+            slc.datasource_id is not None
+            and slc.datasource_id == self._datasource_id
+            and slc.datasource_type == self._datasource_type
+        )
 
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     def run(self) -> Optional[dict[str, Any]]:  # noqa: C901
@@ -124,7 +133,11 @@ class GetExploreCommand(BaseCommand, ABC):
 
         if datasource:
             datasource_name = datasource.name
-            if slc:
+            # The datasource is resolved from the request-supplied form data, which
+            # may point to a different datasource than the chart's own one. Chart
+            # access only authorizes the chart's datasource, so any other datasource
+            # must be authorized on its own.
+            if slc and self._is_chart_datasource(slc):
                 security_manager.raise_for_access(chart=slc)
             else:
                 security_manager.raise_for_access(datasource=datasource)

@@ -353,15 +353,15 @@ def test_raise_for_access_datasource_chart_viewer_no_promiscuous_denies(
 # -- GetExploreCommand access check tests --
 
 
-def test_explore_command_uses_chart_access_when_slice_exists(app_context):
-    """GetExploreCommand checks chart access when a chart exists."""
+def _run_explore_command(*, chart_datasource_id: int, resolved_datasource_id: int):
+    """Run GetExploreCommand and return the mocked security manager."""
     from superset.commands.explore.get import GetExploreCommand
     from superset.commands.explore.parameters import CommandParameters
 
     params = CommandParameters(
         permalink_key=None,
         form_data_key=None,
-        datasource_id=1,
+        datasource_id=resolved_datasource_id,
         datasource_type="table",
         slice_id=1,
     )
@@ -369,6 +369,8 @@ def test_explore_command_uses_chart_access_when_slice_exists(app_context):
 
     mock_slc = MagicMock()
     mock_slc.data = {"slice_id": 1}
+    mock_slc.datasource_id = chart_datasource_id
+    mock_slc.datasource_type = "table"
     mock_slc.created_on_humanized = "1 day ago"
     mock_slc.changed_on_humanized = "1 day ago"
     mock_slc.dashboards = []
@@ -385,11 +387,17 @@ def test_explore_command_uses_chart_access_when_slice_exists(app_context):
     with (
         patch(
             "superset.commands.explore.get.get_form_data",
-            return_value=({"datasource": "1__table", "viz_type": "table"}, mock_slc),
+            return_value=(
+                {
+                    "datasource": f"{resolved_datasource_id}__table",
+                    "viz_type": "table",
+                },
+                mock_slc,
+            ),
         ),
         patch(
             "superset.commands.explore.get.get_datasource_info",
-            return_value=(1, "table"),
+            return_value=(resolved_datasource_id, "table"),
         ),
         patch(
             "superset.commands.explore.get.DatasourceDAO.get_datasource",
@@ -400,4 +408,20 @@ def test_explore_command_uses_chart_access_when_slice_exists(app_context):
         patch("superset.commands.explore.get.request", mock_request),
     ):
         cmd.run()
-        mock_sm.raise_for_access.assert_called_once_with(chart=mock_slc)
+        return mock_sm, mock_slc, mock_datasource
+
+
+def test_explore_command_uses_chart_access_when_slice_exists(app_context):
+    """GetExploreCommand checks chart access for the chart's own datasource."""
+    mock_sm, mock_slc, _ = _run_explore_command(
+        chart_datasource_id=1, resolved_datasource_id=1
+    )
+    mock_sm.raise_for_access.assert_called_once_with(chart=mock_slc)
+
+
+def test_explore_command_checks_datasource_when_it_differs_from_chart(app_context):
+    """A form data supplied datasource is authorized on its own, not via the chart."""
+    mock_sm, _, mock_datasource = _run_explore_command(
+        chart_datasource_id=1, resolved_datasource_id=2
+    )
+    mock_sm.raise_for_access.assert_called_once_with(datasource=mock_datasource)

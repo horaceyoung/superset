@@ -96,4 +96,4 @@ class TagPostSchema(TagObjectSchema):
 
 
 class TagPutSchema(TagObjectSchema):
-    pass
+    name = fields.String(required=True, validate=Length(min=1))

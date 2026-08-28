@@ -19,13 +19,14 @@ from typing import Any, Optional
 
 from flask_appbuilder.models.sqla import Model
 
-from superset import db
+from superset import db, security_manager
 from superset.commands.base import BaseCommand, UpdateMixin
+from superset.commands.exceptions import TagForbiddenError
 from superset.commands.tag.exceptions import TagInvalidError, TagNotFoundError
 from superset.commands.tag.utils import to_object_model, to_object_type
 from superset.commands.utils import current_user_can_modify_object
 from superset.daos.tag import TagDAO
-from superset.tags.models import Tag
+from superset.tags.models import Tag, TagType
 from superset.utils.decorators import transaction
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,24 @@ class UpdateTagCommand(UpdateMixin, BaseCommand):
         self._model = TagDAO.find_by_id(self._model_id)
         if not self._model:
             raise TagNotFoundError()
+
+        # System-generated tags (type:*, owner:*, favorited_by:*) are maintained
+        # by Superset itself and their names are used as lookup keys elsewhere.
+        if self._model.type is not None and self._model.type != TagType.custom:
+            raise TagForbiddenError(
+                f"Tag {self._model.name} is a system tag and cannot be modified"
+            )
+
+        # Renaming a tag affects every user it is shared with, so require the
+        # caller to be an admin or the tag's creator, matching DeleteTagsCommand.
+        if not (
+            security_manager.is_admin()
+            or (
+                self._model.created_by
+                and self._model.created_by == security_manager.current_user
+            )
+        ):
+            raise TagForbiddenError(f"Access denied to tag {self._model.name}")
 
         # Validate object_id
         if objects_to_tag := self._properties.get("objects_to_tag"):

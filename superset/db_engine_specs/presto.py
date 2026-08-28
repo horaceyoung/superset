@@ -59,13 +59,13 @@ from superset.models.sql_types.presto_sql_types import (
     TinyInteger,
 )
 from superset.result_set import destringify
+from superset.sql.parse import Table
 from superset.superset_typing import ResultSetColumnType
 from superset.utils import core as utils, json
 from superset.utils.core import GenericDataType
 
 if TYPE_CHECKING:
     from superset.models.core import Database
-    from superset.sql.parse import Table
 
     with contextlib.suppress(ImportError):  # pyhive may not be installed
         from pyhive.presto import Cursor
@@ -498,12 +498,15 @@ class PrestoBaseEngineSpec(BaseEngineSpec, metaclass=ABCMeta):
             order
         :param filters: dict of field name and filter value combinations
         """
+        dialect = database.get_dialect()
+        quote = dialect.identifier_preparer.quote
+
         limit_clause = f"LIMIT {limit}" if limit else ""
         order_by_clause = ""
         if order_by:
             l = []  # noqa: E741
             for field, desc in order_by:
-                l.append(field + " DESC" if desc else "")
+                l.append(quote(field) + " DESC" if desc else "")
             order_by_clause = "ORDER BY " + ", ".join(l)
 
         where_clause = ""
@@ -513,7 +516,7 @@ class PrestoBaseEngineSpec(BaseEngineSpec, metaclass=ABCMeta):
                 # Escape single quotes so a ``'`` in the caller-supplied value
                 # cannot break out of the SQL string literal. See #41869.
                 escaped_value: str = str(value).replace("'", "''")
-                l.append(f"{field} = '{escaped_value}'")
+                l.append(f"{quote(field)} = '{escaped_value}'")
             where_clause = "WHERE " + " AND ".join(l)
 
         # Partition select syntax changed in v0.199, so check here.
@@ -521,16 +524,11 @@ class PrestoBaseEngineSpec(BaseEngineSpec, metaclass=ABCMeta):
         presto_version = database.get_extra().get("version")
 
         if presto_version and Version(presto_version) < Version("0.199"):
-            full_table_name = (
-                f"{table.schema}.{table.table}" if table.schema else table.table
-            )
+            full_table_name = cls.quote_table(Table(table.table, table.schema), dialect)
             partition_select_clause = f"SHOW PARTITIONS FROM {full_table_name}"
         else:
-            system_table_name = f'"{table.table}$partitions"'
-            full_table_name = (
-                f"{table.schema}.{system_table_name}"
-                if table.schema
-                else system_table_name
+            full_table_name = cls.quote_table(
+                Table(f"{table.table}$partitions", table.schema), dialect
             )
             partition_select_clause = f"SELECT * FROM {full_table_name}"  # noqa: S608
 
@@ -1375,7 +1373,10 @@ class PrestoEngineSpec(PrestoBaseEngineSpec):
 
         with database.get_raw_connection(schema=schema) as conn:
             cursor = conn.cursor()
-            sql = f"SHOW CREATE VIEW {schema}.{table}"
+            full_table_name = cls.quote_table(
+                Table(table, schema), database.get_dialect()
+            )
+            sql = f"SHOW CREATE VIEW {full_table_name}"
             try:
                 cls.execute(cursor, sql, database)
                 rows = cls.fetch_data(cursor, 1)

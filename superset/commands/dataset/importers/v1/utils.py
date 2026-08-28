@@ -45,7 +45,7 @@ from superset.commands.importers.v1.utils import find_existing_for_import
 from superset.connectors.sqla.models import SqlaTable
 from superset.constants import SKIP_VISIBILITY_FILTER_CLASSES
 from superset.daos.dataset import DatasetDAO
-from superset.exceptions import SupersetSecurityException
+from superset.exceptions import SupersetParseError, SupersetSecurityException
 from superset.models.core import Database
 from superset.models.helpers import ChildMultipleResultsFound
 from superset.sql.parse import Table
@@ -554,6 +554,30 @@ def import_dataset(  # noqa: C901
             security_manager.raise_for_access(datasource=dataset)
         except SupersetSecurityException as ex:
             raise DatasetAccessDeniedError() from ex
+
+        # A virtual dataset's SQL can read tables in any schema/catalog of the
+        # database, so the datasource check above — which only resolves against
+        # the dataset's *declared* schema — is not sufficient. Authorize the SQL
+        # itself, mirroring ``CreateDatasetCommand.validate``, before the caller
+        # is granted editorship below.
+        if dataset.sql:
+            try:
+                security_manager.raise_for_access(
+                    database=dataset.database,
+                    sql=dataset.sql,
+                    catalog=dataset.catalog,
+                    schema=dataset.schema,
+                )
+            except SupersetSecurityException as ex:
+                raise DatasetAccessDeniedError() from ex
+            except SupersetParseError as ex:
+                # SQL that cannot be parsed cannot be authorized, so the import
+                # is refused rather than trusted.
+                raise ImportFailedError(
+                    f"Dataset {dataset.table_name!r} (uuid {config['uuid']}) "
+                    f"could not be imported because its SQL is invalid: "
+                    f"{ex.error.message}"
+                ) from ex
 
     try:
         table_exists = dataset.database.has_table(

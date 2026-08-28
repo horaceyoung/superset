@@ -22,6 +22,7 @@ from flask_appbuilder.api import expose, protect, rison as parse_rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from marshmallow import ValidationError
 
+from superset.commands.exceptions import TagForbiddenError
 from superset.commands.tag.create import (
     CreateCustomTagCommand,
     CreateCustomTagWithRelationshipsCommand,
@@ -350,6 +351,10 @@ class TagRestApi(BaseSupersetModelRestApi):
         try:
             changed_model = UpdateTagCommand(pk, item).run()
             response = self.response(200, id=changed_model.id, result=item)
+        except TagNotFoundError:
+            response = self.response_404()
+        except TagForbiddenError as ex:
+            response = self.response(403, message=str(ex))
         except TagUpdateFailedError as ex:
             response = self.response_422(message=str(ex))
 

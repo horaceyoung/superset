@@ -14,12 +14,35 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+from unittest.mock import PropertyMock
+
 import pytest
 from pytest_mock import MockerFixture
 from sqlalchemy.orm.session import Session
 
 from superset import db
 from superset.utils.core import DatasourceType
+
+
+def make_creator(mocker: MockerFixture, tag, username: str = "creator"):
+    """Attach a creator to ``tag`` and make it the current user."""
+    from flask_appbuilder.security.sqla.models import User
+
+    creator = User(
+        username=username,
+        first_name=username,
+        last_name=username,
+        email=f"{username}@example.com",
+    )
+    tag.created_by = creator
+    db.session.add(creator)
+    db.session.flush()
+    mocker.patch(
+        "superset.security.SupersetSecurityManager.current_user",
+        new_callable=PropertyMock,
+        return_value=creator,
+    )
+    return creator
 
 
 @pytest.fixture
@@ -314,6 +337,7 @@ def test_update_command_skips_removal_of_inaccessible_objects(
     mocker.patch(
         "superset.security.SupersetSecurityManager.is_admin", return_value=False
     )
+    make_creator(mocker, tag)
 
     def can_modify(model):
         return isinstance(model, Slice)
@@ -388,6 +412,7 @@ def test_update_command_empty_objects_to_tag_only_removes_accessible(
     mocker.patch(
         "superset.security.SupersetSecurityManager.is_admin", return_value=False
     )
+    make_creator(mocker, tag)
 
     def can_modify(model):
         return isinstance(model, Slice)
@@ -416,3 +441,63 @@ def test_update_command_empty_objects_to_tag_only_removes_accessible(
     }
     assert (ObjectType.dashboard, dashboard.id) in remaining
     assert (ObjectType.chart, chart.id) not in remaining
+
+
+def test_update_command_non_creator_non_admin_denied(
+    session_with_data: Session, mocker: MockerFixture
+):
+    """Regression test: UpdateTagCommand.validate previously looked the tag up
+    by primary key with no ownership check, letting any user with can_write on
+    Tag (default Gamma) rename tags created by other users.
+    """
+    from flask_appbuilder.security.sqla.models import User
+
+    from superset.commands.exceptions import TagForbiddenError
+    from superset.commands.tag.update import UpdateTagCommand
+    from superset.daos.tag import TagDAO
+
+    tag = TagDAO.find_by_name("test_name")
+    make_creator(mocker, tag, username="owner")
+
+    other = User(
+        username="other", first_name="o", last_name="o", email="other@example.com"
+    )
+    db.session.add(other)
+    db.session.flush()
+    mocker.patch(
+        "superset.security.SupersetSecurityManager.is_admin", return_value=False
+    )
+    mocker.patch(
+        "superset.security.SupersetSecurityManager.current_user",
+        new_callable=PropertyMock,
+        return_value=other,
+    )
+
+    with pytest.raises(TagForbiddenError):
+        UpdateTagCommand(tag.id, {"name": "hijacked"}).run()
+
+    assert TagDAO.find_by_name("test_name") is not None
+
+
+def test_update_command_refuses_system_tag(
+    session_with_data: Session, mocker: MockerFixture
+):
+    """System-generated tags (type:*, owner:*, favorited_by:*) are maintained
+    by Superset itself and must not be renamed, regardless of the caller.
+    """
+    from superset.commands.exceptions import TagForbiddenError
+    from superset.commands.tag.update import UpdateTagCommand
+    from superset.tags.models import Tag, TagType
+
+    system_tag = Tag(name="type:dashboard", type=TagType.type)
+    db.session.add(system_tag)
+    db.session.flush()
+
+    mocker.patch(
+        "superset.security.SupersetSecurityManager.is_admin", return_value=True
+    )
+
+    with pytest.raises(TagForbiddenError):
+        UpdateTagCommand(system_tag.id, {"name": "renamed"}).run()
+
+    assert system_tag.name == "type:dashboard"

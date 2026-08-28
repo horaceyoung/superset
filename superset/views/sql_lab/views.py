@@ -51,6 +51,27 @@ def _get_tab_user_id(tab_state_id: int) -> int | None:
     return db.session.query(TabState.user_id).filter_by(id=tab_state_id).scalar()
 
 
+# Columns of `tab_state` that a client is allowed to update. Ownership columns
+# (`user_id`) and anything not listed here are not client editable.
+TAB_STATE_EDITABLE_FIELDS = frozenset(
+    {
+        "active",
+        "autorun",
+        "catalog",
+        "database_id",
+        "extra_json",
+        "hide_left_bar",
+        "label",
+        "latest_query_id",
+        "query_limit",
+        "saved_query_id",
+        "schema",
+        "sql",
+        "template_params",
+    }
+)
+
+
 class TabStateView(BaseSupersetView):
     @has_access_api
     @expose("/", methods=("POST",))
@@ -153,7 +174,19 @@ class TabStateView(BaseSupersetView):
             return Response(status=403)
 
         try:
-            fields = {k: json.loads(v) for k, v in request.form.to_dict().items()}
+            fields = {
+                k: json.loads(v)
+                for k, v in request.form.to_dict().items()
+                if k in TAB_STATE_EDITABLE_FIELDS
+            }
+            if latest_query_id := fields.get("latest_query_id"):
+                query_user_id = (
+                    db.session.query(Query.user_id)
+                    .filter_by(client_id=latest_query_id)
+                    .scalar()
+                )
+                if query_user_id != get_user_id():
+                    return Response(status=403)
             db.session.query(TabState).filter_by(id=tab_state_id).update(fields)
             db.session.commit()
             return json_success(json.dumps(tab_state_id))

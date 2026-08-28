@@ -50,3 +50,23 @@ def to_object_model(
 
         return DatasetDAO.find_by_id(object_id, skip_base_filter=skip_base_filter)
     return None
+
+
+def current_user_can_modify_tagged_object(
+    object_type: ObjectType, object_id: int
+) -> bool:
+    """Whether the current user may modify the tags of the target object.
+
+    Tagging is a write to the object's metadata, so it requires the same
+    editorship/ownership gate as any other modification of the object. The
+    lookup bypasses the DAO base filter so an object the user cannot access
+    still reaches the check; a missing object is allowed through, since a
+    stale reference has no object to authorize against.
+    """
+    # Imported lazily to avoid a circular import via superset.daos.tag
+    from superset.commands.utils import current_user_can_modify_object
+
+    target_object = to_object_model(object_type, object_id, skip_base_filter=True)
+    if not target_object:
+        return True
+    return current_user_can_modify_object(target_object)

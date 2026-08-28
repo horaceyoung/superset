@@ -312,3 +312,7 @@ pre-commit run eslint            # Frontend linting
 ---
 
 **LLM Note**: This codebase is actively modernizing toward full TypeScript and type safety. Always run `pre-commit run` to validate changes. Follow the ongoing refactors section to avoid deprecated patterns.
+
+## About This Fork
+
+This fork of Apache Superset is used for automated remediation demos driven by Devin. Changes here are typically small, issue-scoped fixes produced by automated agents and are not intended to be contributed upstream. Treat it as a demo environment rather than a production deployment of Superset.

@@ -21,6 +21,7 @@ from unittest import mock, skipUnless
 import pandas as pd
 import pytest
 from flask.ctx import AppContext
+from pyhive.sqlalchemy_presto import PrestoDialect
 from sqlalchemy import types  # noqa: F401
 from sqlalchemy.exc import NoSuchTableError
 from sqlalchemy.sql import select
@@ -565,6 +566,7 @@ class TestPrestoDbEngineSpec(SupersetTestCase):
             return_value=[{"column_names": ["ds", "hour"]}]
         )
         database.get_extra = mock.Mock(return_value={})
+        database.get_dialect = mock.Mock(return_value=PrestoDialect())
         df = pd.DataFrame({"ds": ["01-01-19"], "hour": [1]})
         database.get_df = mock.Mock(return_value=df)
         PrestoEngineSpec.get_create_view = mock.Mock(return_value=None)
@@ -586,6 +588,7 @@ class TestPrestoDbEngineSpec(SupersetTestCase):
             {"column_names": ["ds"]}
         ]  # Return indexes so get_df is called
         database.get_extra.return_value = {}
+        database.get_dialect.return_value = PrestoDialect()
         # Simulate that the table is not found
         database.get_df.side_effect = NoSuchTableError("Table not found")
 
@@ -600,6 +603,7 @@ class TestPrestoDbEngineSpec(SupersetTestCase):
         db = mock.Mock()
         db.get_indexes = mock.Mock(return_value=[{"column_names": ["ds", "hour"]}])
         db.get_extra = mock.Mock(return_value={})
+        db.get_dialect = mock.Mock(return_value=PrestoDialect())
         df = pd.DataFrame({"ds": ["01-01-19"], "hour": [1]})
         db.get_df = mock.Mock(return_value=df)
         columns = [{"name": "ds"}, {"name": "hour"}]
@@ -967,16 +971,18 @@ class TestPrestoDbEngineSpec(SupersetTestCase):
         database.get_raw_connection().__enter__().cursor().execute = mock_execute
         database.get_raw_connection().__enter__().cursor().fetchall = mock_fetchall
         database.get_raw_connection().__enter__().cursor().return_value = False
+        database.get_dialect.return_value = PrestoDialect()
         schema = "schema"
         table = "table"
         result = PrestoEngineSpec.get_create_view(database, schema=schema, table=table)
         assert result == "a"
-        mock_execute.assert_called_once_with(f"SHOW CREATE VIEW {schema}.{table}")
+        mock_execute.assert_called_once_with('SHOW CREATE VIEW "schema"."table"')
 
     def test_get_create_view_exception(self):
         mock_execute = mock.MagicMock(side_effect=Exception())
         database = mock.MagicMock()
         database.get_raw_connection().__enter__().cursor().execute = mock_execute
+        database.get_dialect.return_value = PrestoDialect()
         schema = "schema"
         table = "table"
         with self.assertRaises(Exception):  # noqa: B017, PT027
@@ -990,6 +996,7 @@ class TestPrestoDbEngineSpec(SupersetTestCase):
         database = mock.MagicMock()
         database.get_raw_connection().__enter__().cursor().execute = mock_execute
         database.get_raw_connection().__enter__().cursor().fetchall = mock_fetch_data
+        database.get_dialect.return_value = PrestoDialect()
         schema = "schema"
         table = "table"
         result = PrestoEngineSpec.get_create_view(database, schema=schema, table=table)

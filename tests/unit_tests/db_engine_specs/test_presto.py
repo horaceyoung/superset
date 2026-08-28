@@ -454,10 +454,13 @@ def test_partition_query_escapes_single_quote_in_filter_value(
     (single-quote doubling per SQL standard) so a ``'`` in the value cannot
     break out of the string literal.
     """
+    from pyhive.sqlalchemy_presto import PrestoDialect
+
     from superset.db_engine_specs.presto import PrestoBaseEngineSpec
 
     database: mock.MagicMock = mocker.MagicMock()
     database.get_extra.return_value = {}
+    database.get_dialect.return_value = PrestoDialect()
     table: Table = Table("my_table", "my_schema")
 
     injected: str = "2024-01-01' UNION SELECT secret FROM other_table--"
@@ -476,6 +479,51 @@ def test_partition_query_escapes_single_quote_in_filter_value(
     # by injected SQL) must NOT appear anywhere in the output — that would
     # mean the payload broke out of the literal.
     assert "'2024-01-01' UNION SELECT" not in sql
+
+
+def test_partition_query_quotes_identifiers(mocker: MockerFixture) -> None:
+    """
+    Table, schema and column identifiers must be quoted with the dialect
+    preparer so SQL metacharacters cannot break out of the statement.
+    """
+    from pyhive.sqlalchemy_presto import PrestoDialect
+
+    from superset.db_engine_specs.presto import PrestoBaseEngineSpec
+
+    database: mock.MagicMock = mocker.MagicMock()
+    database.get_extra.return_value = {}
+    database.get_dialect.return_value = PrestoDialect()
+
+    sql: str = PrestoBaseEngineSpec._partition_query(
+        Table('evil"tbl', 'evil"schema'),
+        indexes=[{"column_names": ["ds"]}],
+        database=database,
+        order_by=[('evil"ds', True)],
+        filters={'evil"ds': "2024-01-01"},
+    )
+
+    assert 'SELECT * FROM "evil""schema"."evil""tbl$partitions"' in sql
+    assert '"evil""ds" = \'2024-01-01\'' in sql
+    assert 'ORDER BY "evil""ds" DESC' in sql
+
+
+def test_get_create_view_quotes_identifiers(mocker: MockerFixture) -> None:
+    """
+    ``SHOW CREATE VIEW`` must use quoted identifiers so a crafted table or
+    schema name cannot inject SQL.
+    """
+    from pyhive.sqlalchemy_presto import PrestoDialect
+
+    from superset.db_engine_specs.presto import PrestoEngineSpec
+
+    database: mock.MagicMock = mocker.MagicMock()
+    database.get_dialect.return_value = PrestoDialect()
+    execute = mocker.patch.object(PrestoEngineSpec, "execute")
+    mocker.patch.object(PrestoEngineSpec, "fetch_data", return_value=[["CREATE VIEW"]])
+
+    PrestoEngineSpec.get_create_view(database, 'evil"schema', 'evil"tbl')
+
+    assert execute.mock_calls[0][1][1] == 'SHOW CREATE VIEW "evil""schema"."evil""tbl"'
 
 
 def test_mask_encrypted_extra() -> None:
